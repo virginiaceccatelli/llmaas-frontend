@@ -99,7 +99,11 @@ dummy value so response times do not reveal which ids exist.
 
 ## What of the architecture is already wired up
 
-Measured against [architecture.md](../LLMaaS/architecture.md), across both repos.
+Measured against [architecture.md](../architecture.md), across both repos.
+
+> That link resolves when this repo is checked out as the `frontend/` submodule
+> of `llmaas-backend`, which is how the two are joined. Standalone, read it at
+> <https://github.com/virginiaceccatelli/llmaas-backend/blob/main/architecture.md>.
 
 | Layer | Planned | Status |
 |---|---|---|
@@ -168,6 +172,12 @@ docker compose up --build
 ```
 
 `docker-compose.yml` binds to `127.0.0.1:8081`, expecting a TLS terminator in
-front of it. See the backend repo's `docs/DEPLOY_OPENSTACK.md` for VM sizing
-and security groups: the frontend VM is the only one with a public interface,
-and it needs egress to the gateway VM's private address only.
+front of it. See the backend repo's
+[docs/INTEGRATION_PLAN.md, Phase 1](../docs/INTEGRATION_PLAN.md#phase-1--openstack)
+for VM sizing and the security-group table: the frontend VM is the only one
+with a public interface, and it needs egress to the gateway VM's private
+address only — not to the GPU VMs.
+
+To run **both tiers at once** during development, use the backend repo's
+`docker-compose.full.yml` rather than this file; it wires this service to a
+broker on the same network with `hs256` already configured on both sides.

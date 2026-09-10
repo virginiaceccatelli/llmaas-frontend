@@ -1,0 +1,48 @@
+# Tell the backend repo to re-run the cross-repo contract tests.
+#
+# This is the reciprocal half of the link, and it is a TRIGGER, not a submodule.
+# The backend repo pins this repo as `frontend/`; this repo pins nothing. Two
+# repos pointing at each other would be a cycle, and there would be two
+# competing answers to "which commit pair has been verified?".
+#
+# What the backend's contract.yml does: brings up broker + frontend together
+# and runs THIS repo's scripts/smoke.py against that broker.
+#
+# NOTE: it tests the frontend commit the BACKEND currently pins, which is not
+# necessarily the one that just landed here. That is the point — it tells you
+# the pinned pair still works. To test the new commit, bump the pointer in the
+# backend repo first. See that repo's docs/WORKFLOW.md, "Working across the
+# two repos".
+#
+# SETUP (once): create a fine-grained PAT with Actions: read+write on
+# virginiaceccatelli/llmaas-backend, and add it to THIS repo as the secret
+# BACKEND_DISPATCH_TOKEN. Settings -> Secrets and variables -> Actions.
+
+name: notify backend
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    # Skip cleanly on forks and before the secret exists, rather than failing
+    # every push with a red X that means nothing.
+    if: github.repository == 'virginiaceccatelli/llmaas-frontend'
+    steps:
+      - name: run the backend's contract workflow
+        env:
+          GH_TOKEN: ${{ secrets.BACKEND_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "BACKEND_DISPATCH_TOKEN is not set - skipping."
+            echo "See the comment at the top of this file for setup."
+            exit 0
+          fi
+          gh workflow run contract.yml \
+            --repo virginiaceccatelli/llmaas-backend \
+            --ref main
+          echo "Triggered. Watch it at:"
+          echo "https://github.com/virginiaceccatelli/llmaas-backend/actions/workflows/contract.yml"
