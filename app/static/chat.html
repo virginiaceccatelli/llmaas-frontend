@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat — WIIT LLMaaS</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<aside class="rail" id="rail"></aside>
+
+<div class="pane">
+  <div class="pane-head">
+    <h1 id="title">New chat</h1>
+    <span class="spacer"></span>
+    <span class="doc" id="stamp"></span>
+  </div>
+
+  <div class="scroll" id="scroll">
+    <div class="thread" id="log">
+      <div class="welcome" id="welcome">
+        <div class="mark-lg">W</div>
+        <h2>WIIT LLMaaS</h2>
+        <p>Pick a model below and start typing. Your messages take the same
+           authenticated path a customer's script would.</p>
+      </div>
+    </div>
+    <div class="thread" style="padding-top:0">
+      <div id="note" class="banner hidden"></div>
+    </div>
+  </div>
+
+  <div class="dock">
+    <form class="composer" id="form">
+      <div class="inputwrap">
+        <textarea id="input" rows="1" placeholder="Ask WIIT LLMaaS something…"></textarea>
+        <div class="tools">
+          <label class="mini optional">
+            <span>max</span>
+            <input id="maxtok" type="number" min="1" max="32000" step="64" value="512"
+                   title="max_tokens">
+          </label>
+          <label class="mini optional">
+            <span>stream</span>
+            <select id="stream">
+              <option value="1" selected>on</option>
+              <option value="0">off</option>
+            </select>
+          </label>
+          <span class="spacer"></span>
+          <!-- The model choice sits with the message it applies to. -->
+          <span class="picker">
+            <select id="model" aria-label="Model"><option>loading…</option></select>
+          </span>
+          <button type="button" id="stop" class="tiny hidden">Stop</button>
+          <button class="primary send" id="send" type="submit" aria-label="Send">↑</button>
+        </div>
+      </div>
+      <p class="hint">Enter to send · Shift+Enter for a new line</p>
+    </form>
+  </div>
+</div>
+
+<script type="module">
+import { api, esc, me, mountShell, readSSE, store, toast } from '/static/app.js';
+
+const $ = (id) => document.getElementById(id);
+const log = $('log'), note = $('note'), scroll = $('scroll'), ta = $('input');
+
+let chatId = store.newId();
+let history = [];       // the OpenAI-shaped messages array for this chat
+let controller = null;  // in-flight request, so Stop can abort it
+
+const info = await me();
+if (!info.signed_in) location.href = '/login';
+mountShell({ user: info.user_id, withChats: true });
+$('newchat').onclick = () => newChat();
+drawChats();
+
+/* Models come from the broker's /v1/models, which needs an API key — the BFF
+   mints one for this session on the first call. */
+try {
+  const models = await api('/api/models');
+  $('model').innerHTML = models.data
+    .map((m) => `<option value="${esc(m.id)}">${esc(m.id)}</option>`).join('');
+  const last = localStorage.getItem('wiit.llmaas.model');
+  if (last && models.data.some((m) => m.id === last)) $('model').value = last;
+} catch (e) {
+  $('model').innerHTML = '<option>unavailable</option>';
+  toast(note, `Could not list models: ${e.message}`, 'warn');
+}
+
+$('model').onchange = () => {
+  localStorage.setItem('wiit.llmaas.model', $('model').value);
+  // Reasoning models spend their budget thinking before any visible answer, so
+  // a small cap returns empty content and looks like a bug. Give them room.
+  if ($('model').value.includes('thinking') && Number($('maxtok').value) < 512) {
+    $('maxtok').value = 512;
+    toast(note, 'Raised max tokens to 512: reasoning models need room to think ' +
+                'before they produce any visible text.', 'good');
+  }
+};
+
+/* --- the conversation rail -------------------------------------------- */
+
+function drawChats() {
+  const list = store.all();
+  const el = $('chatlist');
+  if (!list.length) { el.innerHTML = '<div class="none">No saved chats yet.</div>'; return; }
+  el.innerHTML = list.map((c) => `
+    <div class="chat-item ${c.id === chatId ? 'on' : ''}" data-open="${esc(c.id)}">
+      <span class="t">${esc(c.title)}</span>
+      <button class="x" data-drop="${esc(c.id)}" title="Delete">×</button>
+    </div>`).join('');
+
+  el.querySelectorAll('[data-open]').forEach((n) => {
+    n.onclick = (e) => { if (!e.target.dataset.drop) open(n.dataset.open); };
+  });
+  el.querySelectorAll('[data-drop]').forEach((b) => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      store.remove(b.dataset.drop);
+      if (b.dataset.drop === chatId) newChat(); else drawChats();
+    };
+  });
+}
+
+function persist() {
+  if (!history.length) return;
+  store.upsert({ id: chatId, title: store.title(history), messages: history });
+  drawChats();
+  $('title').textContent = store.title(history);
+}
+
+function newChat() {
+  chatId = store.newId();
+  history = [];
+  $('title').textContent = 'New chat';
+  $('stamp').textContent = '';
+  log.innerHTML = '<div class="welcome" id="welcome"><div class="mark-lg">W</div>' +
+    '<h2>WIIT LLMaaS</h2><p>Nothing from the previous conversation is sent ' +
+    'with a new one.</p></div>';
+  toast(note, '');
+  drawChats();
+  ta.focus();
+}
+
+function open(id) {
+  const c = store.get(id);
+  if (!c) return;
+  chatId = c.id;
+  history = c.messages;
+  $('title').textContent = c.title;
+  $('stamp').textContent = new Date(c.updated).toLocaleString();
+  log.innerHTML = '';
+  for (const m of history) {
+    const b = turn(m.role === 'user' ? 'me' : 'bot');
+    b.textContent = m.content;
+  }
+  toast(note, '');
+  drawChats();
+  scroll.scrollTop = scroll.scrollHeight;
+}
+
+/* --- rendering --------------------------------------------------------- */
+
+function turn(kind) {
+  $('welcome')?.remove();
+  const el = document.createElement('div');
+  el.className = `turn ${kind}`;
+  el.innerHTML = kind === 'me' ? '<div class="bubble"></div>'
+                               : '<div class="avatar">W</div><div class="bubble"></div>';
+  log.appendChild(el);
+  toBottom();
+  return el.querySelector('.bubble');
+}
+
+function meta(bubble, text) {
+  const m = document.createElement('div');
+  m.className = 'meta';
+  m.textContent = text;
+  bubble.appendChild(m);
+}
+
+const atBottom = () => scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
+const toBottom = () => { scroll.scrollTop = scroll.scrollHeight; };
+
+function busy(on) {
+  $('send').disabled = on;
+  $('stop').classList.toggle('hidden', !on);
+}
+
+ta.addEventListener('input', () => {          // grow with the text
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, window.innerHeight * 0.32) + 'px';
+});
+ta.onkeydown = (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('form').requestSubmit(); }
+};
+
+/* --- sending ----------------------------------------------------------- */
+
+$('form').onsubmit = async (e) => {
+  e.preventDefault();
+  const text = ta.value.trim();
+  if (!text) return;
+
+  toast(note, '');
+  ta.value = '';
+  ta.style.height = 'auto';
+  turn('me').textContent = text;
+  history.push({ role: 'user', content: text });
+  persist();
+
+  const body = {
+    model: $('model').value,
+    messages: history,
+    stream: $('stream').value === '1',
+  };
+  const cap = Number($('maxtok').value);
+  if (cap > 0) body.max_tokens = cap;
+
+  busy(true);
+  controller = new AbortController();
+  const out = turn('bot');
+  out.classList.add('typing');
+
+  try {
+    if (!body.stream) {
+      const data = await api('/api/chat', { method: 'POST', body });
+      const msg = data.choices?.[0]?.message?.content ?? '';
+      out.classList.remove('typing');
+      out.textContent = msg || '(no visible text — try raising max tokens)';
+      history.push({ role: 'assistant', content: msg });
+      if (data.usage) meta(out, usageLine(data.usage, data.model));
+      toBottom();
+      return;
+    }
+
+    // Streaming: fetch directly so we can read the body as it arrives.
+    const r = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': info.csrf },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${r.status}`);
+    }
+
+    // The model name stays the one we asked for. Streamed chunks are relayed
+    // by the broker untouched, so their `model` field is the *upstream* id —
+    // which the broker rewrites on the buffered path precisely so it never
+    // reaches a caller. Do not put it on screen.
+    let acc = '', usage = null;
+    await readSSE(r, (ev) => {
+      const delta = ev.choices?.[0]?.delta?.content;
+      if (delta) {
+        const stick = atBottom();
+        acc += delta;
+        out.classList.remove('typing');
+        out.textContent = acc;
+        if (stick) toBottom();
+      }
+      if (ev.usage) usage = ev.usage;      // final chunk, via stream_options
+    });
+    out.classList.remove('typing');
+    if (!acc) out.textContent = '(no visible text — try raising max tokens)';
+    history.push({ role: 'assistant', content: acc });
+    if (usage) meta(out, usageLine(usage, body.model));
+  } catch (err) {
+    out.classList.remove('typing');
+    if (err.name === 'AbortError') {
+      meta(out, 'stopped');
+      history.push({ role: 'assistant', content: out.textContent });
+    } else {
+      out.parentElement.className = 'turn oops';
+      out.textContent = err.message;
+      history.pop();                        // do not resend a failed turn
+    }
+  } finally {
+    busy(false);
+    controller = null;
+    persist();
+    toBottom();
+  }
+};
+
+function usageLine(u, model) {
+  return `${model} · ${u.prompt_tokens ?? 0} prompt + ` +
+         `${u.completion_tokens ?? 0} completion = ${u.total_tokens ?? 0} tokens`;
+}
+
+ta.focus();
+</script>
+</body>
+</html>

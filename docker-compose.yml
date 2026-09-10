@@ -1,0 +1,40 @@
+# The Frontend VM stack. One service: this is the only tier users reach.
+#
+#   docker compose up --build
+#
+# BROKER_URL must point at the gateway VM's PRIVATE address. Nothing here
+# should ever be able to reach the GPU VMs directly.
+#
+# In production put a TLS terminator (Caddy/nginx) in front of this and set
+# COOKIE_SECURE=true — the session cookie is a bearer credential.
+
+services:
+  frontend:
+    build: .
+    environment:
+      # host.docker.internal reaches a broker running on the host during local
+      # development; on the VM this is the gateway's private IP.
+      BROKER_URL: ${BROKER_URL:-http://host.docker.internal:8080}
+      BROKER_AUTH_MODE: ${BROKER_AUTH_MODE:-hs256}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?set AUTH_JWT_SECRET, matching the broker}
+      AUTH_JWT_ISSUER: ${AUTH_JWT_ISSUER:-llmaas-frontend}
+      AUTH_JWT_AUDIENCE: ${AUTH_JWT_AUDIENCE:-llmaas-broker}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      USERS_FILE: /srv/users.json
+      ALLOW_PASSWORDLESS: ${ALLOW_PASSWORDLESS:-false}
+    volumes:
+      # Password hashes, created with scripts/users.py. Read-only: the app
+      # never writes it. Comment both lines out to run without a users file.
+      - ./users.json:/srv/users.json:ro
+    ports:
+      # Bound to localhost so the TLS terminator is the only public listener.
+      - "127.0.0.1:8081:8081"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8081/api/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped

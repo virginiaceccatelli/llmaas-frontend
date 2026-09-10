@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API keys — WIIT LLMaaS</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<aside class="rail" id="rail"></aside>
+
+<div class="pane">
+  <div class="pane-head">
+    <h1>API keys</h1>
+  </div>
+
+  <div class="scroll">
+    <div class="sheet wide">
+      <p class="sub">
+        Keys authenticate programs against <code>/v1/*</code>. Only a SHA-256 hash
+        is stored, so a key is shown once, at creation, and never again.
+      </p>
+
+      <div id="note" class="banner hidden"></div>
+
+      <div class="card">
+        <form class="row" id="create">
+          <div class="grow">
+            <label for="label">New key label</label>
+            <input id="label" style="width:100%" placeholder="my-laptop" maxlength="64">
+          </div>
+          <button class="primary" type="submit">Create key</button>
+        </form>
+      </div>
+
+      <!-- The one moment the plaintext key exists in a browser. -->
+      <div class="card accent hidden" id="reveal">
+        <h2 style="margin:0 0 12px">Copy this key now — it will not be shown again</h2>
+        <div class="row">
+          <input id="secret" class="mono grow" readonly style="width:100%">
+          <button id="copy">Copy</button>
+          <button id="dismiss">Done</button>
+        </div>
+        <p class="sub" style="margin:14px 0 0">
+          Send it as <code>Authorization: Bearer &lt;key&gt;</code>.
+        </p>
+      </div>
+
+      <h2>Your keys</h2>
+      <div class="card flush">
+        <table>
+          <thead>
+            <tr><th>Label</th><th>Prefix</th><th>Created</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div class="empty hidden" id="none">No keys yet.</div>
+      </div>
+
+      <h2>This browser session</h2>
+      <div class="card">
+        <p class="sub" style="margin-top:0">
+          The chat tab needs a key too. This session is using
+          <span id="sesskey" class="mono">none yet</span>.
+          A minted one is revoked automatically when you sign out.
+        </p>
+        <form class="row" id="usekey">
+          <div class="grow">
+            <label for="paste">Chat with a key you already hold instead</label>
+            <input id="paste" class="mono" style="width:100%" placeholder="wiit_…" maxlength="256">
+          </div>
+          <button type="submit">Use this key</button>
+          <button type="button" id="resetkey">Reset to a minted key</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { api, esc, me, mountShell, toast, when } from '/static/app.js';
+
+const $ = (id) => document.getElementById(id);
+const note = $('note');
+
+const info = await me();
+if (!info.signed_in) location.href = '/login';
+mountShell({ user: info.user_id });
+showSessionKey(info.session_key_prefix);
+
+async function refresh() {
+  let keys = [];
+  try {
+    keys = await api('/api/keys');
+  } catch (e) {
+    toast(note, e.message, 'warn');
+    return;
+  }
+  $('none').classList.toggle('hidden', keys.length > 0);
+  $('rows').innerHTML = keys.map((k) => `
+    <tr class="${k.revoked ? 'revoked' : ''}">
+      <td>${esc(k.label)}</td>
+      <td class="mono">${esc(k.prefix)}…</td>
+      <td>${esc(when(k.created_at))}</td>
+      <td><span class="pill ${k.revoked ? 'off' : 'ok'}">${k.revoked ? 'revoked' : 'active'}</span></td>
+      <td style="text-align:right">${k.revoked ? ''
+        : `<button class="danger tiny" data-revoke="${esc(k.id)}" data-label="${esc(k.label)}">Revoke</button>`}</td>
+    </tr>`).join('');
+
+  $('rows').querySelectorAll('[data-revoke]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm(`Revoke "${b.dataset.label}"? Anything using it stops working immediately.`)) return;
+      b.disabled = true;
+      try {
+        await api(`/api/keys/${b.dataset.revoke}`, { method: 'DELETE' });
+        toast(note, 'Key revoked.', 'good');
+        // Revoking the session's own key clears it; the next chat mints another.
+        const state = await me();
+        showSessionKey(state.session_key_prefix);
+        refresh();
+      } catch (e) {
+        toast(note, e.message, 'warn');
+        b.disabled = false;
+      }
+    };
+  });
+}
+
+$('create').onsubmit = async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button');
+  btn.disabled = true;
+  try {
+    const k = await api('/api/keys', {
+      method: 'POST',
+      body: { label: $('label').value.trim() || 'default' },
+    });
+    $('secret').value = k.api_key;
+    $('reveal').classList.remove('hidden');
+    $('label').value = '';
+    toast(note, '');
+    refresh();
+  } catch (e) {
+    toast(note, e.message, 'warn');
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+$('copy').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($('secret').value);
+    $('copy').textContent = 'Copied';
+    setTimeout(() => ($('copy').textContent = 'Copy'), 1500);
+  } catch {
+    $('secret').select();     // clipboard needs HTTPS; fall back to selecting
+  }
+};
+
+$('dismiss').onclick = () => {
+  $('secret').value = '';
+  $('reveal').classList.add('hidden');
+};
+
+$('usekey').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api('/api/session-key', { method: 'POST', body: { api_key: $('paste').value } });
+    $('paste').value = '';
+    showSessionKey(r.prefix);
+    toast(note, 'Chat will now use that key.', 'good');
+  } catch (e) {
+    toast(note, e.message, 'warn');
+  }
+};
+
+$('resetkey').onclick = async () => {
+  try {
+    await api('/api/session-key', { method: 'DELETE' });
+    showSessionKey(null);
+    toast(note, 'Cleared. The next message mints a fresh session key.', 'good');
+    refresh();
+  } catch (e) {
+    toast(note, e.message, 'warn');
+  }
+};
+
+function showSessionKey(prefix) {
+  $('sesskey').textContent = prefix ? `${prefix}…` : 'none yet';
+}
+
+refresh();
+</script>
+</body>
+</html>

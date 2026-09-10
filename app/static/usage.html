@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Usage — WIIT LLMaaS</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<aside class="rail" id="rail"></aside>
+
+<div class="pane">
+  <div class="pane-head">
+    <h1>Usage</h1>
+    <span class="spacer"></span>
+    <span class="doc" id="stamp"></span>
+    <button id="refresh" class="tiny">Refresh</button>
+  </div>
+
+  <div class="scroll">
+    <div class="sheet wide">
+      <p class="sub">
+        Token totals per model, across every key you own. Metered by the broker
+        on each request — including streams that were cut short.
+      </p>
+
+      <div id="note" class="banner hidden"></div>
+
+      <div class="card flush">
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th class="num">Requests</th>
+              <th class="num">Prompt tokens</th>
+              <th class="num">Completion tokens</th>
+              <th class="num">Total</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+          <tfoot id="foot"></tfoot>
+        </table>
+        <div class="empty hidden" id="none">
+          Nothing metered yet — send a message on the <a href="/">chat tab</a>.
+        </div>
+      </div>
+
+      <h2>Platform health</h2>
+      <div class="card">
+        <pre class="mono" id="health" style="margin:0;overflow-x:auto">checking…</pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { api, esc, me, mountShell, toast } from '/static/app.js';
+
+const $ = (id) => document.getElementById(id);
+const note = $('note');
+const n = (v) => Number(v || 0).toLocaleString();
+
+const info = await me();
+if (!info.signed_in) location.href = '/login';
+mountShell({ user: info.user_id });
+
+async function refresh() {
+  try {
+    const rows = await api('/api/usage');
+    $('none').classList.toggle('hidden', rows.length > 0);
+    $('rows').innerHTML = rows.map((r) => `
+      <tr>
+        <td class="mono">${esc(r.model)}</td>
+        <td class="num">${n(r.requests)}</td>
+        <td class="num">${n(r.prompt_tokens)}</td>
+        <td class="num">${n(r.completion_tokens)}</td>
+        <td class="num">${n(Number(r.prompt_tokens) + Number(r.completion_tokens))}</td>
+      </tr>`).join('');
+
+    const sum = (f) => rows.reduce((a, r) => a + Number(r[f] || 0), 0);
+    $('foot').innerHTML = rows.length ? `
+      <tr>
+        <th>All models</th>
+        <th class="num">${n(sum('requests'))}</th>
+        <th class="num">${n(sum('prompt_tokens'))}</th>
+        <th class="num">${n(sum('completion_tokens'))}</th>
+        <th class="num">${n(sum('prompt_tokens') + sum('completion_tokens'))}</th>
+      </tr>` : '';
+    $('stamp').textContent = `updated ${new Date().toLocaleTimeString()}`;
+    toast(note, '');
+  } catch (e) {
+    toast(note, e.message, 'warn');
+  }
+}
+
+async function health() {
+  try {
+    const h = await (await fetch('/api/health')).json();
+    $('health').textContent = JSON.stringify(h, null, 2);
+  } catch (e) {
+    $('health').textContent = String(e);
+  }
+}
+
+$('refresh').onclick = refresh;
+refresh();
+health();
+</script>
+</body>
+</html>

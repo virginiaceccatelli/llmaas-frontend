@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — WIIT LLMaaS</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="plain">
+
+<div class="loginbox">
+  <a class="brand" href="/">
+    <span class="mark">W</span>
+    <span class="name">WIIT <b>LLMaaS</b></span>
+  </a>
+
+  <div id="note" class="banner hidden"></div>
+
+  <form class="card" id="form">
+    <h1>Sign in</h1>
+    <p class="sub">Chat, API keys and usage for your account.</p>
+
+    <label for="user_id">User</label>
+    <input id="user_id" name="user_id" autocomplete="username" autofocus
+           placeholder="demo-user" required>
+
+    <div id="pwfield" style="margin-top:14px">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password">
+    </div>
+
+    <button class="primary" type="submit" style="width:100%;margin-top:20px">Sign in</button>
+    <div id="err" class="banner warn hidden" style="margin:14px 0 0"></div>
+  </form>
+</div>
+
+<script type="module">
+import { api, toast } from '/static/app.js';
+
+const note = document.getElementById('note');
+const err = document.getElementById('err');
+const next = new URLSearchParams(location.search).get('next') || '/';
+
+const state = await (await fetch('/api/me')).json();
+if (state.passwordless) {
+  // No users file: the BFF accepts any id. Say so loudly rather than letting
+  // it look like a real login.
+  document.getElementById('pwfield').classList.add('hidden');
+  toast(note, 'Dev mode: no users file, so any user id is accepted without a ' +
+              'password. Run  python scripts/users.py add <id>  to require one.', 'warn');
+}
+
+document.getElementById('form').onsubmit = async (e) => {
+  e.preventDefault();
+  toast(err, '');
+  const btn = e.target.querySelector('button');
+  btn.disabled = true;
+  try {
+    await api('/api/login', {
+      method: 'POST',
+      body: {
+        user_id: document.getElementById('user_id').value.trim(),
+        password: document.getElementById('password').value,
+      },
+    });
+    location.href = next.startsWith('/') ? next : '/';
+  } catch (e) {
+    toast(err, e.message, 'warn');
+    btn.disabled = false;
+  }
+};
+</script>
+</body>
+</html>

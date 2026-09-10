@@ -1,0 +1,7 @@
+.env
+users.json
+.venv/
+__pycache__/
+*.pyc
+.deepeval/
+.ruff_cache/
