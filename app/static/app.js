@@ -116,32 +116,43 @@ export function mountShell({ user, withChats = false }) {
 }
 
 /* --- conversation store ------------------------------------------------
-   Chat history lives in THIS BROWSER and nowhere else. The platform stores
-   no prompt or completion text anywhere — not in the broker's schema, not in
-   vLLM's logs — and this keeps that true: localStorage is never read by the
-   server. Clearing site data erases it; another device will not see it. */
-const KEY = 'wiit.llmaas.chats';
+   Chat history lives on the SERVER, one history per user, reached through the
+   BFF at /api/conversations. It used to live in this browser's localStorage,
+   which is per-BROWSER and not per-user: two people signing in to the same
+   browser shared one history, and one person on two devices had two. Neither
+   is a multi-tenant product, so it moved.
 
+   That means the platform now stores prompt and completion text — see the
+   comment above `conversations` in db/init.sql for what that obliges you to
+   do. The inference path still logs nothing.
+
+   Every method that touches the server is async. `newId` and `title` are pure
+   and stay synchronous. */
 export const store = {
-  all() {
+  async all() {
     try {
-      const raw = JSON.parse(localStorage.getItem(KEY) || '[]');
-      return Array.isArray(raw) ? raw : [];
-    } catch { return []; }
+      return await api('/api/conversations');
+    } catch {
+      // Signed out, or the broker is down. An empty rail is the right
+      // degradation: never invent history.
+      return [];
+    }
   },
-  save(list) {
+  async get(id) {
     try {
-      // Keep the rail short and localStorage well under its quota.
-      localStorage.setItem(KEY, JSON.stringify(list.slice(0, 50)));
-    } catch { /* private mode, or quota: chats simply do not persist */ }
+      return await api(`/api/conversations/${encodeURIComponent(id)}`);
+    } catch { return null; }
   },
-  get(id) { return this.all().find((c) => c.id === id) || null; },
-  upsert(chat) {
-    const list = this.all().filter((c) => c.id !== chat.id);
-    list.unshift({ ...chat, updated: Date.now() });
-    this.save(list);
+  async upsert(chat) {
+    // Whole-array replace, so a retried save cannot duplicate a turn.
+    return api(`/api/conversations/${encodeURIComponent(chat.id)}`, {
+      method: 'PUT',
+      body: { title: chat.title, messages: chat.messages },
+    });
   },
-  remove(id) { this.save(this.all().filter((c) => c.id !== id)); },
+  async remove(id) {
+    return api(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
   newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); },
   title(messages) {
     const first = messages.find((m) => m.role === 'user');

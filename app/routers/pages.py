@@ -24,30 +24,30 @@ def _page(name: str) -> FileResponse:
     return FileResponse(STATIC / name, headers={"Cache-Control": "no-store"})
 
 
-def _guard(request: Request, settings: Settings, name: str) -> Response:
-    if session.lookup(request, settings) is None:
+async def _guard(request: Request, settings: Settings, name: str) -> Response:
+    if await session.lookup(request, settings) is None:
         return RedirectResponse(f"/login?next={request.url.path}", status_code=303)
     return _page(name)
 
 
 @router.get("/")
 async def chat_page(request: Request, settings: Settings = Depends(get_settings)):
-    return _guard(request, settings, "chat.html")
+    return await _guard(request, settings, "chat.html")
 
 
 @router.get("/keys")
 async def keys_page(request: Request, settings: Settings = Depends(get_settings)):
-    return _guard(request, settings, "keys.html")
+    return await _guard(request, settings, "keys.html")
 
 
 @router.get("/usage")
 async def usage_page(request: Request, settings: Settings = Depends(get_settings)):
-    return _guard(request, settings, "usage.html")
+    return await _guard(request, settings, "usage.html")
 
 
 @router.get("/login")
 async def login_page(request: Request, settings: Settings = Depends(get_settings)):
-    if session.lookup(request, settings) is not None:
+    if await session.lookup(request, settings) is not None:
         return RedirectResponse("/", status_code=303)
     return _page("login.html")
 

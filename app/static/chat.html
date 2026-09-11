@@ -104,8 +104,8 @@ $('model').onchange = () => {
 
 /* --- the conversation rail -------------------------------------------- */
 
-function drawChats() {
-  const list = store.all();
+async function drawChats() {
+  const list = await store.all();
   const el = $('chatlist');
   if (!list.length) { el.innerHTML = '<div class="none">No saved chats yet.</div>'; return; }
   el.innerHTML = list.map((c) => `
@@ -115,21 +115,27 @@ function drawChats() {
     </div>`).join('');
 
   el.querySelectorAll('[data-open]').forEach((n) => {
-    n.onclick = (e) => { if (!e.target.dataset.drop) open(n.dataset.open); };
+    n.onclick = (e) => { if (!e.target.dataset.drop) open(n.dataset.open); };  // open() is async; fire and forget
   });
   el.querySelectorAll('[data-drop]').forEach((b) => {
-    b.onclick = (e) => {
+    b.onclick = async (e) => {
       e.stopPropagation();
-      store.remove(b.dataset.drop);
-      if (b.dataset.drop === chatId) newChat(); else drawChats();
+      await store.remove(b.dataset.drop);
+      if (b.dataset.drop === chatId) newChat(); else await drawChats();
     };
   });
 }
 
-function persist() {
+async function persist() {
   if (!history.length) return;
-  store.upsert({ id: chatId, title: store.title(history), messages: history });
-  drawChats();
+  try {
+    await store.upsert({ id: chatId, title: store.title(history), messages: history });
+  } catch (e) {
+    // The turn itself succeeded; only saving it failed. Say so rather than
+    // letting the user believe a conversation was stored when it was not.
+    toast(note, 'chat not saved: ' + e.message, 'warn');
+  }
+  await drawChats();
   $('title').textContent = store.title(history);
 }
 
@@ -146,13 +152,14 @@ function newChat() {
   ta.focus();
 }
 
-function open(id) {
-  const c = store.get(id);
+async function open(id) {
+  const c = await store.get(id);
   if (!c) return;
   chatId = c.id;
   history = c.messages;
   $('title').textContent = c.title;
-  $('stamp').textContent = new Date(c.updated).toLocaleString();
+  $('stamp').textContent = c.updated_at
+    ? new Date(c.updated_at).toLocaleString() : '';
   log.innerHTML = '';
   for (const m of history) {
     const b = turn(m.role === 'user' ? 'me' : 'bot');

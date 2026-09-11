@@ -77,7 +77,7 @@ async def set_session_key(
     sess: Session = Depends(require_csrf),
 ):
     """Chat with a key the user already holds instead of a minted one."""
-    apikeys.use_key(sess, body.api_key)
+    await apikeys.use_key(sess, body.api_key)
     return {"status": "ok", "prefix": sess.api_key_prefix, "minted": False}
 
 

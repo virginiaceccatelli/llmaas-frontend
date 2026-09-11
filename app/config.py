@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     # Signs the session cookie. Leave empty and a random one is generated at
     # startup, which logs everyone out on restart. Set it in production.
     # Generate: python -c "import secrets; print(secrets.token_urlsafe(32))"
+    # Where sessions live. Set it and sessions survive a restart and work
+    # across workers; leave it empty and they are a dict in this process
+    # (local development only). On the VMs this is the gateway VM's Redis,
+    # on its own database number so a FLUSHDB elsewhere cannot sign everyone
+    # out. See app/session.py.
+    redis_url: str = ""
+
     session_secret: str = ""
     session_ttl_s: int = 8 * 3600
     session_cookie: str = "llmaas_session"

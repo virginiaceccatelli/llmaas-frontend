@@ -26,7 +26,7 @@ async def login(
     settings: Settings = Depends(get_settings),
 ):
     user_id = users.authenticate(body.user_id, body.password, settings)
-    sess = session.create(user_id, response, settings)
+    sess = await session.create(user_id, response, settings)
     log.info("signed in: %s", user_id)
     return {"user_id": sess.user_id, "csrf": sess.csrf}
 
@@ -40,7 +40,7 @@ async def logout(
     # Revoke the key we minted for this session before dropping it, otherwise
     # it would linger in the database, valid and unreachable.
     await apikeys.release(sess, settings)
-    session.destroy(sess, response, settings)
+    await session.destroy(sess, response, settings)
     return {"status": "signed out"}
 
 
@@ -51,7 +51,7 @@ async def me(
 ):
     """The page calls this on load: it decides sign-in state and supplies the
     CSRF token for every later mutating call."""
-    sess = session.lookup(request, settings)
+    sess = await session.lookup(request, settings)
     if sess is None:
         return {"signed_in": False, "passwordless": users.passwordless(settings)}
     return {

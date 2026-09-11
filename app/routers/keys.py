@@ -47,7 +47,7 @@ async def revoke_key(
     result = await broker.control(
         "DELETE", f"/keys/{key_id}", sess.user_id, settings
     )
-    apikeys.forget(sess, key_id)
+    await apikeys.forget(sess, key_id)
     return result
 
 
@@ -57,3 +57,60 @@ async def usage(
     settings: Settings = Depends(get_settings),
 ):
     return await broker.control("GET", "/usage", sess.user_id, settings)
+
+
+# --- conversations: chat history, one per user ----------------------------
+# A thin pass-through, exactly like /api/keys above. The isolation is the
+# broker's: every query there is scoped by the `sub` of the JWT we mint, so a
+# user cannot read or delete another's history even by guessing an id.
+#
+# This replaced localStorage, which was per-BROWSER: two people signing in to
+# the same browser shared one history, and one person on two devices had two.
+
+
+class ConversationBody(BaseModel):
+    title: str = Field(default="New chat", max_length=200)
+    messages: list[dict] = Field(default_factory=list, max_length=400)
+
+
+@router.get("/conversations")
+async def list_conversations(
+    sess: Session = Depends(require_session),
+    settings: Settings = Depends(get_settings),
+):
+    return await broker.control("GET", "/conversations", sess.user_id, settings)
+
+
+@router.get("/conversations/{conversation_id}")
+async def get_conversation(
+    conversation_id: str,
+    sess: Session = Depends(require_session),
+    settings: Settings = Depends(get_settings),
+):
+    return await broker.control(
+        "GET", f"/conversations/{conversation_id}", sess.user_id, settings
+    )
+
+
+@router.put("/conversations/{conversation_id}")
+async def put_conversation(
+    conversation_id: str,
+    body: ConversationBody,
+    sess: Session = Depends(require_csrf),
+    settings: Settings = Depends(get_settings),
+):
+    return await broker.control(
+        "PUT", f"/conversations/{conversation_id}", sess.user_id, settings,
+        json=body.model_dump(),
+    )
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    sess: Session = Depends(require_csrf),
+    settings: Settings = Depends(get_settings),
+):
+    return await broker.control(
+        "DELETE", f"/conversations/{conversation_id}", sess.user_id, settings
+    )

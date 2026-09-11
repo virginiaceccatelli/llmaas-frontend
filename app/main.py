@@ -42,6 +42,7 @@ async def lifespan(app: FastAPI):
     session.configure(settings)
     users.load(settings)  # raises if the file exists but is malformed
 
+    await session.connect(settings)
     await broker.connect(settings)
 
     log.info(
@@ -58,6 +59,7 @@ async def lifespan(app: FastAPI):
     yield
 
     await broker.disconnect()
+    await session.disconnect()
 
 
 app = FastAPI(
